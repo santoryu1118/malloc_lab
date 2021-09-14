@@ -80,7 +80,7 @@ static void place(void*, size_t);
 */
 
 /* 
- * mm_init - initialize the malloc package.
+ * mm_init - initialize the malloc package. 아 shibal
  */
 int mm_init(void)
 {
