@@ -51,14 +51,17 @@ team_t team = {
 #define MAX(x,y) ((x) > (y) ?(x) :(y))              // max 
 #define PACK(size, alloc)  ((size) | (alloc))       // size랑 bool allocated bit을 pack하는거
 #define GET(p) (*(unsigned int*)(p))                // get_size, get_alloc에 쓰이는 함수
-#define PUT(p, val) (*(unsigned int*)(p) = (val))   // p address에 value 넣는거   PUT(HDRP(bp), PACK (size, 1)) 이런식으로
+#define PUT(p, val) (GET(p) = (val))                // p address에 value 넣는거   PUT(HDRP(bp), PACK (size, 1)) 이런식으로
 #define GET_SIZE(p) (GET(p) & ~0x7)                 // 16진수 7을 2진수로 바꾸면 111, ~111 == 000  alloc 3자리 bit 빼주는거
 #define GET_ALLOC(p) (GET(p) & 0x1)                 // 할당되있는지 아닌지 보는 함수
 
-#define HDRP(bp) ((char*)(bp) - WSIZE)                              // header의 address 
-#define FTRP(bp) ((char*)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)         // footer의 address 
-#define NEXT_BLKP(bp) ((char*)(bp) + GET_SIZE(((char*)(bp) - WSIZE))) // next node의 header의 address 
-#define PREV_BLKP(bp) ((char*)(bp) - GET_SIZE(((char*)(bp) - DSIZE))) // prev node의 header의 address 
+#define HDRP(bp) ((char*)(bp) - WSIZE)                                // header의 address 
+#define FTRP(bp) ((char*)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)           // footer의 address 
+#define NEXT_BLKP(bp) ((char*)(bp) + GET_SIZE(HDRP(bp)))              // next node의 header의 address 
+#define PREV_BLKP(bp) ((char*)(bp) - GET_SIZE(HDRP(bp)- WSIZE))       // prev node의 header의 address 
+
+#define PRED_FREEP(bp)  (*(void**)(bp))             // *(GET(PRED_FREEP(bp))) == 다음 가용리스트의 bp //Predecessor
+#define SUCC_FREEP(bp)  (*(void**)(bp + WSIZE))     // *(GET(SUCC_FREEP(bp))) == 다음 가용리스트의 bp //successor
 
 // static variable
 static char* heap_listp;
@@ -70,7 +73,6 @@ static void* coalesce(void*);
 static void* find_fit(size_t);
 static void* next_fit(size_t);
 static void place(void*, size_t);
-
 
 
 /* void *mem_sbrk(int incr); 함수는 커널의 brk 포인터에 incr을 더해서 힙을 늘리거나 줄인다. 
