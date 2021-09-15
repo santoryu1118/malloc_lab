@@ -121,7 +121,7 @@ static void* coalesce(void * bp){
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));  // 뒤의 block의 header를 확인 
     size_t size = GET_SIZE(HDRP(bp));
 
-    if (prev_alloc && next_alloc){  // if prev & next are both allocated
+    if (prev_alloc && next_alloc){             // if prev & next are both allocated
         next_findp = bp;
         return bp;
     }
@@ -136,7 +136,7 @@ static void* coalesce(void * bp){
         size += GET_SIZE(FTRP(PREV_BLKP(bp)));     // previous block의 footer에서 size 받아와서 더해줌
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        bp = PREV_BLKP(bp);
+        bp = PREV_BLKP(bp);                        // return해줘야 되는 pointer bp도 전 block걸로 옮김
     }
 
     else{       // prev & next 둘다 free 라면
@@ -146,7 +146,7 @@ static void* coalesce(void * bp){
         bp = PREV_BLKP(bp);
     }
 
-    next_findp = bp;
+    next_findp = bp;          // next_fit에 사용될 탐색 지점도 여기서 update
     return bp;
 }
 
@@ -164,6 +164,7 @@ void *mm_malloc(size_t size){
     if (size <= DSIZE)
         asize = 2*DSIZE;   //최소 16byte의 블록 구성
     else
+        // 8의 배수를 맞춰주기 위한 연산
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1))/ DSIZE);
     
     // search the free list for a fit
@@ -194,10 +195,11 @@ static void* find_fit(size_t asize){
 }
 
 // next fit으로 전에 검색 종료된 부분부터 검색
+// 이전 검색이 종료된 지점부터 검색 시작이므로 next_findp 도 같이 바꿔줌
 static void* next_fit(size_t asize){
-    // next_findp = heap_listp;
     void* bp = next_findp;
     
+    // 탐색 지점 next_findp부터 검색 시작
     while (GET_SIZE(HDRP(next_findp)) > 0){
         if (GET_SIZE(HDRP(next_findp)) >= asize && !GET_ALLOC(HDRP(next_findp))){
             return next_findp;
@@ -205,6 +207,7 @@ static void* next_fit(size_t asize){
         next_findp = NEXT_BLKP(next_findp);
     }
 
+    // 만약 위 loop에서 검색이 안되었다면 heap_listp부터 초기 next_findp지점까지 검색
     next_findp = heap_listp;
     while(GET_SIZE(HDRP(next_findp)) > 0 && next_findp < bp){
         if (GET_SIZE(HDRP(next_findp)) >= asize && !GET_ALLOC(HDRP(next_findp))){
@@ -253,8 +256,6 @@ void mm_free(void *bp)
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  * realloc은 이미 할당한 블록의 크기를 바꿀 때 사용
- * 인자로 주어진 사이즈가 기존 블록의 사이즈보다 작으면 인자로 주어진 사이즈만큼의 데이터만 잘라서 옮긴다.
- * memcpy는 블록 내 데이터를 옮기는 기본 제공 함수
  */
 void *mm_realloc(void *ptr, size_t size)
 {
@@ -262,13 +263,12 @@ void *mm_realloc(void *ptr, size_t size)
     void *newptr;
     size_t copySize;
     
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
+    if ((newptr = mm_malloc(size)) == NULL);
       return NULL;
     copySize = GET_SIZE(HDRP(oldptr));
-    if (size < copySize)
+    if (size < copySize)               // 인자로 주어진 사이즈가 기존 블록의 사이즈보다 작으면 인자로 주어진 사이즈만큼의 데이터만 잘라서 옮긴다.
       copySize = size;
-    memcpy(newptr, oldptr, copySize);
+    memcpy(newptr, oldptr, copySize);  // memcpy는 블록 내 데이터를 옮기는 기본 제공 함수
     mm_free(oldptr);
     return newptr;
 }

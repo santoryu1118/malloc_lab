@@ -51,7 +51,7 @@ team_t team = {
 #define MAX(x,y) ((x) > (y) ?(x) :(y))              // max 
 #define PACK(size, alloc)  ((size) | (alloc))       // size랑 bool allocated bit을 pack하는거
 #define GET(p) (*(unsigned int*)(p))                // get_size, get_alloc에 쓰이는 함수
-#define PUT(p, val) (GET(p) = (val))                // p address에 value 넣는거   PUT(HDRP(bp), PACK (size, 1)) 이런식으로
+#define PUT(p, val) (*(unsigned int*)(p) = (val))                // p address에 value 넣는거   PUT(HDRP(bp), PACK (size, 1)) 이런식으로
 #define GET_SIZE(p) (GET(p) & ~0x7)                 // 16진수 7을 2진수로 바꾸면 111, ~111 == 000  alloc 3자리 bit 빼주는거
 #define GET_ALLOC(p) (GET(p) & 0x1)                 // 할당되있는지 아닌지 보는 함수
 
@@ -65,14 +65,15 @@ team_t team = {
 
 // static variable
 static char* heap_listp;
-static char* next_findp;
+static char* free_listp;
 
 // static functions
 static void* extend_heap(size_t);
 static void* coalesce(void*);
 static void* find_fit(size_t);
-static void* next_fit(size_t);
 static void place(void*, size_t);
+static void remove_block(void*);
+static void push_block(void*);
 
 
 /* void *mem_sbrk(int incr); 함수는 커널의 brk 포인터에 incr을 더해서 힙을 늘리거나 줄인다. 
@@ -80,18 +81,20 @@ static void place(void*, size_t);
 */
 
 /* 
- * mm_init - initialize the malloc package. 아 shibal
+ * mm_init - initialize the malloc package
  */
 int mm_init(void)
 {
-    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void*)-1)
+    if ((heap_listp = mem_sbrk(6*WSIZE)) == (void*)-1)
         return -1;
-    PUT(heap_listp, 0);                           //alignment padding
-    PUT(heap_listp + 1*WSIZE, PACK(DSIZE, 1));    //prologue header
-    PUT(heap_listp + 2*WSIZE, PACK(DSIZE, 1));    //prologue footer
-    PUT(heap_listp + 3*WSIZE, PACK(0, 1));        //epilogue header
+    PUT(heap_listp, 0);                             // alignment padding
+    PUT(heap_listp + 1*WSIZE, PACK(2*DSIZE, 1));    // prologue header, 32bit에서 포인터는 4byte
+    PUT(heap_listp + 2*WSIZE, NULL);                // predecessor pointer
+    PUT(heap_listp + 3*WSIZE, NULL);                // successor pointer
+    PUT(heap_listp + 4*WSIZE, PACK(2*DSIZE, 1));    // prologue footer
+    PUT(heap_listp + 5*WSIZE, PACK(0, 1));          // epilogue header
     heap_listp += 2*WSIZE;
-    next_findp = heap_listp;
+    free_listp = heap_listp;
 
     // Extend the empty heap with a free block of CHUNKSIZE bytes (초기 가용 블록 생성)
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
@@ -122,35 +125,59 @@ static void* coalesce(void * bp){
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));  // 앞의 block의 footer을 확인
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));  // 뒤의 block의 header를 확인 
     size_t size = GET_SIZE(HDRP(bp));
-
-    if (prev_alloc && next_alloc){  // if prev & next are both allocated
-        next_findp = bp;
-        return bp;
-    }
+    remove_block(bp);
     
-    else if (prev_alloc && !next_alloc){        // 다음 block만 free면
+    if (prev_alloc && !next_alloc){        // 다음 block만 free면
+        remove_block(NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));  // next block의 header에서 size 받아와서 더해줌
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));           // FTRP는 GET_SIZE(HDRP(bp))를 이용하기 때문에 FTRP(bp)가 next block의 footer을 가르킬거임
     }
 
     else if (!prev_alloc && next_alloc){           // 전 block만 free면
+        remove_block(PREV_BLKP(bp));
         size += GET_SIZE(FTRP(PREV_BLKP(bp)));     // previous block의 footer에서 size 받아와서 더해줌
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
 
-    else{       // prev & next 둘다 free 라면
+    else if (!prev_alloc && !next_alloc){       // prev & next 둘다 free 라면
+        remove_block(PREV_BLKP(bp));
+        remove_block(NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(NEXT_BLKP(bp))) + GET_SIZE(FTRP(PREV_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
 
-    next_findp = bp;
+    push_block(bp);
+    // free_listp = bp; 이건 push block 함수 안에 넣어주자
     return bp;
 }
+
+static void remove_block(void* bp){
+    // 맨 앞 block일때
+    if (PRED_FREEP(bp) == NULL){
+        bp = SUCC_FREEP(bp);
+        PRED_FREEP(bp) = NULL;
+        //맨 앞 pointer update
+        free_listp = bp;
+    }
+    // 맨 앞 block이 아닐때
+    else{
+        SUCC_FREEP(PRED_FREEP(bp)) = SUCC_FREEP(bp);
+        PRED_FREEP(SUCC_FREEP(bp)) = PRED_FREEP(bp);
+    }
+}
+
+static void push_block(void* bp){
+    SUCC_FREEP(bp) = free_listp;
+    PRED_FREEP(free_listp) = bp;
+    PRED_FREEP(bp) = NULL;
+    free_listp = bp;
+}
+
 
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
@@ -169,7 +196,7 @@ void *mm_malloc(size_t size){
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1))/ DSIZE);
     
     // search the free list for a fit
-    if ((bp = next_fit(asize)) != NULL){
+    if ((bp = find_fit(asize)) != NULL){
         place(bp, asize);
         return bp;
     }
@@ -187,41 +214,20 @@ void *mm_malloc(size_t size){
 // first fit으로 처음부터 검색
 static void* find_fit(size_t asize){
     void* bp;
-    for (bp = heap_listp; GET_SIZE(HDRP(bp)) >0 ; bp = NEXT_BLKP(bp)){
+    for (bp = free_listp; bp != heap_listp; bp = SUCC_FREEP(bp)){
         // 만약 size도 맞고 allocation도 안되있으면
-        if (GET_SIZE(HDRP(bp)) >= asize && !GET_ALLOC(HDRP(bp)))
+        if (GET_SIZE(HDRP(bp)) >= asize)
             return bp;
     }
     return NULL;
 }
 
-// next fit으로 전에 검색 종료된 부분부터 검색
-static void* next_fit(size_t asize){
-    // next_findp = heap_listp;
-    void* bp = next_findp;
-    
-    while (GET_SIZE(HDRP(next_findp)) > 0){
-        if (GET_SIZE(HDRP(next_findp)) >= asize && !GET_ALLOC(HDRP(next_findp))){
-            return next_findp;
-        }
-        next_findp = NEXT_BLKP(next_findp);
-    }
 
-    next_findp = heap_listp;
-    while(GET_SIZE(HDRP(next_findp)) > 0 && next_findp < bp){
-        if (GET_SIZE(HDRP(next_findp)) >= asize && !GET_ALLOC(HDRP(next_findp))){
-            return next_findp;
-        }
-        next_findp = NEXT_BLKP(next_findp);
-    }
-    return NULL;
-}
-
-
-// mm_malloc 함수에서 heap에 할당하는 helper function
+// mm_malloc 함수에서 heap에 할당을 해주는 helper function
 static void place(void* bp, size_t asize){
 
     size_t csize = GET_SIZE(HDRP(bp));
+    remove_block(bp);
 
     // 만약 사이즈가 커서 split을 할 정도라면
     if (csize >= asize + 2*DSIZE){
@@ -230,6 +236,7 @@ static void place(void* bp, size_t asize){
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(csize - asize, 0));
         PUT(FTRP(bp), PACK(csize - asize, 0));
+        push_block(bp);
     }
     else{
         PUT(HDRP(bp), PACK(csize, 1));
